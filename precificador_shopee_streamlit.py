@@ -173,13 +173,20 @@ def formatar_percentual(valor: float) -> str:
 # ==================================================================================
 
 def montar_grafico(resultado: dict) -> Figure:
+    """
+    Plota a curva real Venda Bruta (X) x Venda Líquida (Y), usando a função
+    RegrasShopee.venda_liquida diretamente — por isso a curva mostra os
+    "degraus" causados pelas mudanças de alíquota/taxa fixa entre as faixas
+    de preço da Shopee (R$ 7,99 / R$ 79,99 / R$ 99,99 / R$ 199,99 / R$ 499,99).
+    """
     preco_custo = resultado["preco_custo"]
 
-    markups = np.linspace(
-        RegrasShopee.MARKUP_PISO, RegrasShopee.MARKUP_IDEAL_MAX, 200
-    )
-    # Markup agora é sobre o CUSTO: liquido = custo * (1 + markup)
-    valores_liquidos = preco_custo * (1 + markups)
+    # Intervalo do eixo X: um pouco antes do piso até um pouco depois da
+    # ancoragem, para enquadrar todos os pontos-chave calculados.
+    x_min = max(preco_custo * 0.5, 0.01)
+    x_max = resultado["preco_ancoragem"] * 1.15
+    vendas_brutas = np.linspace(x_min, x_max, 400)
+    vendas_liquidas = np.array([RegrasShopee.venda_liquida(v) for v in vendas_brutas])
 
     cor_fundo = "#0e1117"   # combina com o tema escuro padrão do Streamlit
     cor_texto = "#e0e0e0"
@@ -193,35 +200,51 @@ def montar_grafico(resultado: dict) -> Figure:
     ax.tick_params(colors=cor_texto)
     ax.grid(True, color=cor_grade, linewidth=0.6, linestyle="--", alpha=0.6)
 
+    # -- Curva real Venda Bruta x Venda Líquida -- #
     ax.plot(
-        markups * 100, valores_liquidos,
-        color="#2ecc71", linewidth=2.5, label="Venda Líquida necessária",
+        vendas_brutas, vendas_liquidas,
+        color="#2ecc71", linewidth=2.2, label="Venda Líquida (real, com taxas da Shopee)",
+        zorder=3,
     )
 
+    # -- Linha de referência y = x (venda líquida se não houvesse imposto/taxa) -- #
+    ax.plot(
+        vendas_brutas, vendas_brutas,
+        color="#5a5a5a", linewidth=1.2, linestyle=":", label="Sem impostos/taxas (referência)",
+        zorder=1,
+    )
+
+    # -- Faixa ideal de venda bruta destacada -- #
     ax.axvspan(
-        RegrasShopee.MARKUP_IDEAL_MIN * 100,
-        RegrasShopee.MARKUP_IDEAL_MAX * 100,
-        color="#3498db", alpha=0.12, label="Faixa ideal (43% – 87%)",
+        resultado["ideal_min"], resultado["ideal_max"],
+        color="#3498db", alpha=0.12, label="Faixa ideal de venda (43% – 87%)",
     )
 
+    # -- Linha vertical do piso operacional -- #
     ax.axvline(
-        RegrasShopee.MARKUP_PISO * 100,
+        resultado["piso"],
         color="#e67e22", linestyle="--", linewidth=1.5,
-        label=f"Piso operacional ({formatar_percentual(RegrasShopee.MARKUP_PISO)})",
+        label=f"Piso ({formatar_moeda(resultado['piso'])})",
     )
 
-    liquido_sugerido = RegrasShopee.venda_liquida(resultado["preco_sugerido"])
-    ax.scatter(
-        [resultado["markup_sugerido"] * 100], [liquido_sugerido],
-        color="#f1c40f", s=90, zorder=5, edgecolor="black",
-        label="Preço sugerido",
-    )
+    # -- Pontos-chave marcados sobre a curva -- #
+    pontos = [
+        (resultado["preco_sugerido"], "#f1c40f", "Preço sugerido"),
+        (resultado["preco_ancoragem"], "#9b59b6", "Ancoragem (\"De:\")"),
+        (resultado["preco_promocional"], "#e74c3c", "Promocional (\"Por:\")"),
+    ]
+    for preco_bruto, cor, rotulo in pontos:
+        liquido = RegrasShopee.venda_liquida(preco_bruto)
+        ax.scatter(
+            [preco_bruto], [liquido],
+            color=cor, s=90, zorder=5, edgecolor="black", label=rotulo,
+        )
 
-    ax.set_xlabel("Markup sobre o Custo (%)", color=cor_texto)
-    ax.set_ylabel("Valor Líquido da Venda (R$)", color=cor_texto)
+    ax.set_xlabel("Venda Bruta (R$)", color=cor_texto)
+    ax.set_ylabel("Venda Líquida (R$)", color=cor_texto)
     ax.set_title(f"Custo: {formatar_moeda(preco_custo)}", fontsize=12, color=cor_texto, pad=12)
     ax.legend(
-        loc="upper left", fontsize=8.5, facecolor=cor_fundo,
+        loc="upper left", fontsize=8, facecolor=cor_fundo,
         edgecolor=cor_grade, labelcolor=cor_texto,
     )
 
