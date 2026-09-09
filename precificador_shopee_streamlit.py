@@ -38,9 +38,9 @@ class RegrasShopee:
     """
 
     ALIQUOTA_SIMPLES = 0.1070          # 10,70% sobre a venda bruta (Simples Nacional EPP 4ª faixa)
-    MARKUP_PISO = 0.2349               # 23,49% -> markup mínimo operacional sobre a venda líquida
-    MARKUP_IDEAL_MIN = 0.43            # 43%    -> início da faixa ideal
-    MARKUP_IDEAL_MAX = 0.87            # 87%    -> topo da faixa ideal
+    MARKUP_PISO = 0.2349               # 23,49% -> markup mínimo operacional sobre o CUSTO
+    MARKUP_IDEAL_MIN = 0.43            # 43%    -> início da faixa ideal (sobre o custo)
+    MARKUP_IDEAL_MAX = 0.87            # 87%    -> topo da faixa ideal (sobre o custo)
 
     DESCONTO_GATILHO_MIN = 0.35        # 35%
     DESCONTO_GATILHO_MAX = 0.55        # 55%
@@ -87,10 +87,17 @@ class RegrasShopee:
 
     @classmethod
     def markup(cls, preco_bruto: float, preco_custo: float) -> float:
+        """
+        Markup percentual sobre o CUSTO (margem clássica):
+
+            markup = (Venda Líquida - Preço de Custo) / Preço de Custo
+
+        Ou seja, o percentual representa o quanto o lucro líquido da venda
+        (já descontando imposto e taxa/comissão da Shopee) equivale em
+        relação ao que foi pago pelo produto.
+        """
         liquido = cls.venda_liquida(preco_bruto)
-        if liquido <= 0:
-            return -9.99
-        return (liquido - preco_custo) / liquido
+        return (liquido - preco_custo) / preco_custo
 
     @classmethod
     def preco_para_markup(cls, preco_custo: float, markup_alvo: float) -> float:
@@ -171,7 +178,8 @@ def montar_grafico(resultado: dict) -> Figure:
     markups = np.linspace(
         RegrasShopee.MARKUP_PISO, RegrasShopee.MARKUP_IDEAL_MAX, 200
     )
-    valores_liquidos = preco_custo / (1 - markups)
+    # Markup agora é sobre o CUSTO: liquido = custo * (1 + markup)
+    valores_liquidos = preco_custo * (1 + markups)
 
     cor_fundo = "#0e1117"   # combina com o tema escuro padrão do Streamlit
     cor_texto = "#e0e0e0"
@@ -209,7 +217,7 @@ def montar_grafico(resultado: dict) -> Figure:
         label="Preço sugerido",
     )
 
-    ax.set_xlabel("Markup sobre a Venda Líquida (%)", color=cor_texto)
+    ax.set_xlabel("Markup sobre o Custo (%)", color=cor_texto)
     ax.set_ylabel("Valor Líquido da Venda (R$)", color=cor_texto)
     ax.set_title(f"Custo: {formatar_moeda(preco_custo)}", fontsize=12, color=cor_texto, pad=12)
     ax.legend(
@@ -317,7 +325,7 @@ if "resultado" in st.session_state:
         card(
             "📊 Faixa Ideal de Venda (43% a 87%)",
             f"{formatar_moeda(r['ideal_min'])} → {formatar_moeda(r['ideal_max'])}",
-            "De 43% (entrada) até 87% (topo) de markup sobre a venda líquida",
+            "De 43% (entrada) até 87% (topo) de markup sobre o custo do produto",
             "#3498db",
         )
         card(
