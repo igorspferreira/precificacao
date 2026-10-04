@@ -3,20 +3,23 @@
  SISTEMA DE PRECIFICAÇÃO AUTOMATIZADA PARA VENDEDORES SHOPEE — VERSÃO WEB
 ==================================================================================
 
-Versão em Streamlit da calculadora de precificação Shopee. A camada de regras
-de negócio (classe RegrasShopee) é EXATAMENTE a mesma da versão desktop feita
-com CustomTkinter — só a interface mudou.
+Versão em Streamlit da calculadora de precificação Shopee.
+
+Novidades desta versão:
+    - Seletor da faixa do Simples Nacional (Anexo I) — o imposto sobre a
+      venda bruta passa a depender da faixa de faturamento escolhida, em vez
+      de ficar fixo em 10,70% (EPP 4ª Faixa).
+    - Card "Zero a Zero": preço de venda bruta que cobre exatamente os
+      impostos e taxas da Shopee, sem lucro (markup 0% sobre o custo).
+    - Markup Piso atualizado para 12,75% (antes 23,49%).
+    - Faixa de Trabalho (markup ideal) atualizada para 35% a 75% (antes 43%-87%).
+    - Tabela de taxas da Shopee atualizada:
+        * R$ 0,01 a R$ 9,00: taxa fixa + comissão = 70% flat da venda bruta.
+        * R$ 9,00 a R$ 79,99: taxa fixa atualizada de R$ 4,00 para R$ 4,50.
 
 Como rodar localmente:
     pip install streamlit matplotlib numpy
     streamlit run precificador_shopee_streamlit.py
-
-Como publicar de graça:
-    1. Suba este arquivo em um repositório no GitHub.
-    2. Acesse https://share.streamlit.io e conecte o repositório.
-    3. Em poucos minutos você terá uma URL pública (ex.: seu-app.streamlit.app).
-    4. No celular, abra essa URL no navegador e use "Adicionar à tela inicial"
-       (Chrome/Safari) para que ela se comporte como um app instalado (PWA).
 
 Autor: Gerado com apoio do Claude (Anthropic)
 ==================================================================================
@@ -28,44 +31,70 @@ from matplotlib.figure import Figure
 
 
 # ==================================================================================
-# 1. CAMADA DE REGRAS DE NEGÓCIO (idêntica à versão desktop)
+# 1. TABELA DO SIMPLES NACIONAL — ANEXO I (COMÉRCIO)
+# ==================================================================================
+#
+# Alíquotas NOMINAIS de cada faixa (as mesmas usadas na fórmula do Simples
+# Nacional antes de aplicar a "parcela a deduzir", que depende do faturamento
+# exato dos últimos 12 meses — RBT12). Essa é a mesma simplificação que a
+# versão anterior do app já usava (10,70% = alíquota nominal da 4ª Faixa).
+# Se você precisar da alíquota EFETIVA exata, calcule à parte com seu RBT12
+# e ajuste o valor aqui.
+# ==================================================================================
+
+TABELA_SIMPLES_ANEXO_I = {
+    "1ª Faixa — até R$ 180.000,00/ano (4,00%)": 0.0400,
+    "2ª Faixa — até R$ 360.000,00/ano (7,30%)": 0.0730,
+    "3ª Faixa — até R$ 720.000,00/ano (9,50%)": 0.0950,
+    "4ª Faixa — até R$ 1.800.000,00/ano (10,70%)": 0.1070,
+    "5ª Faixa — até R$ 3.600.000,00/ano (14,30%)": 0.1430,
+    "6ª Faixa — até R$ 4.800.000,00/ano (19,00%)": 0.1900,
+}
+
+
+# ==================================================================================
+# 2. CAMADA DE REGRAS DE NEGÓCIO
 # ==================================================================================
 
 class RegrasShopee:
     """
     Concentra todas as constantes e fórmulas de negócio do sistema:
     tributação, taxas/comissões da Shopee e as metas de markup.
+
+    A alíquota do Simples Nacional NÃO é mais uma constante fixa — ela é
+    passada como parâmetro em cada cálculo, de acordo com a faixa que o
+    usuário seleciona na interface.
     """
 
-    ALIQUOTA_SIMPLES = 0.1070          # 10,70% sobre a venda bruta (Simples Nacional EPP 4ª faixa)
-    MARKUP_PISO = 0.2349               # 23,49% -> markup mínimo operacional sobre o CUSTO
-    MARKUP_IDEAL_MIN = 0.43            # 43%    -> início da faixa ideal (sobre o custo)
-    MARKUP_IDEAL_MAX = 0.87            # 87%    -> topo da faixa ideal (sobre o custo)
+    MARKUP_ZERO_A_ZERO = 0.00           # 0%     -> cobre impostos/taxas, sem lucro
+    MARKUP_PISO = 0.1275                # 12,75% -> markup mínimo operacional sobre o CUSTO
+    MARKUP_IDEAL_MIN = 0.35             # 35%    -> início da faixa de trabalho (sobre o custo)
+    MARKUP_IDEAL_MAX = 0.75             # 75%    -> topo da faixa de trabalho (sobre o custo)
 
-    DESCONTO_GATILHO_MIN = 0.35        # 35%
-    DESCONTO_GATILHO_MAX = 0.55        # 55%
+    DESCONTO_GATILHO_MIN = 0.35         # 35%
+    DESCONTO_GATILHO_MAX = 0.55         # 55%
     DESCONTO_GATILHO_REFERENCIA = 0.45  # ponto médio usado para exibir um exemplo de preço promocional
 
-    # Taxa fixa "ajustada" para produtos até R$ 7,99 (ver observação no README /
-    # na resposta do chat: a Shopee não publica fórmula fechada para essa faixa).
-    _TAXA_FIXA_REFERENCIA = 4.00
-    _PRECO_REFERENCIA_FIXA = 8.00
+    # Taxa fixa da faixa R$ 9,00 a R$ 79,99 (valor publicado pela Shopee) —
+    # atualizada de R$ 4,00 para R$ 4,50.
+    _TAXA_FIXA_PADRAO = 4.50
 
     @classmethod
     def taxa_shopee(cls, preco_bruto: float) -> float:
+        """
+        Calcula o valor (em R$) da taxa + comissão da Shopee para um dado
+        preço bruto, de acordo com a tabela progressiva por faixa de preço.
+        """
         if preco_bruto <= 0:
             return 0.0
 
-        if preco_bruto <= 7.99:
-            taxa_fixa_proporcional = cls._TAXA_FIXA_REFERENCIA * (
-                preco_bruto / cls._PRECO_REFERENCIA_FIXA
-            )
-            taxa = 0.20 * preco_bruto + taxa_fixa_proporcional
-            teto = 0.50 * preco_bruto
-            return min(taxa, teto)
+        if preco_bruto <= 9.00:
+            # Faixa: R$ 0,01 a R$ 9,00 -> taxa fixa + comissão = 70% flat da venda bruta.
+            return 0.70 * preco_bruto
 
         elif preco_bruto <= 79.99:
-            return 0.20 * preco_bruto + 4.00
+            # Faixa: R$ 9,00 a R$ 79,99 -> 20% + taxa fixa de R$ 4,50.
+            return 0.20 * preco_bruto + cls._TAXA_FIXA_PADRAO
 
         elif preco_bruto <= 99.99:
             return 0.14 * preco_bruto + 16.00
@@ -80,27 +109,30 @@ class RegrasShopee:
             return 0.14 * preco_bruto + 28.00
 
     @classmethod
-    def venda_liquida(cls, preco_bruto: float) -> float:
-        imposto = preco_bruto * cls.ALIQUOTA_SIMPLES
+    def venda_liquida(cls, preco_bruto: float, aliquota_simples: float) -> float:
+        """Venda bruta menos imposto (Simples Nacional) e taxa/comissão Shopee."""
+        imposto = preco_bruto * aliquota_simples
         taxa_shopee = cls.taxa_shopee(preco_bruto)
         return preco_bruto - imposto - taxa_shopee
 
     @classmethod
-    def markup(cls, preco_bruto: float, preco_custo: float) -> float:
+    def markup(cls, preco_bruto: float, preco_custo: float, aliquota_simples: float) -> float:
         """
         Markup percentual sobre o CUSTO (margem clássica):
 
             markup = (Venda Líquida - Preço de Custo) / Preço de Custo
-
-        Ou seja, o percentual representa o quanto o lucro líquido da venda
-        (já descontando imposto e taxa/comissão da Shopee) equivale em
-        relação ao que foi pago pelo produto.
         """
-        liquido = cls.venda_liquida(preco_bruto)
+        liquido = cls.venda_liquida(preco_bruto, aliquota_simples)
         return (liquido - preco_custo) / preco_custo
 
     @classmethod
-    def preco_para_markup(cls, preco_custo: float, markup_alvo: float) -> float:
+    def preco_para_markup(
+        cls, preco_custo: float, markup_alvo: float, aliquota_simples: float
+    ) -> float:
+        """
+        Busca binária (bisseção) do Preço Bruto necessário para atingir o
+        markup_alvo desejado, dada a alíquota do Simples Nacional escolhida.
+        """
         if preco_custo <= 0:
             return 0.0
 
@@ -109,7 +141,7 @@ class RegrasShopee:
 
         for _ in range(200):
             meio = (limite_inferior + limite_superior) / 2
-            m = cls.markup(meio, preco_custo)
+            m = cls.markup(meio, preco_custo, aliquota_simples)
             if m < markup_alvo:
                 limite_inferior = meio
             else:
@@ -118,32 +150,36 @@ class RegrasShopee:
         return round(limite_superior, 2)
 
     @classmethod
-    def calcular_precificacao(cls, preco_custo: float) -> dict:
-        piso = cls.preco_para_markup(preco_custo, cls.MARKUP_PISO)
-        ideal_min = cls.preco_para_markup(preco_custo, cls.MARKUP_IDEAL_MIN)
-        ideal_max = cls.preco_para_markup(preco_custo, cls.MARKUP_IDEAL_MAX)
+    def calcular_precificacao(cls, preco_custo: float, aliquota_simples: float) -> dict:
+        zero_a_zero = cls.preco_para_markup(preco_custo, cls.MARKUP_ZERO_A_ZERO, aliquota_simples)
+        piso = cls.preco_para_markup(preco_custo, cls.MARKUP_PISO, aliquota_simples)
+        ideal_min = cls.preco_para_markup(preco_custo, cls.MARKUP_IDEAL_MIN, aliquota_simples)
+        ideal_max = cls.preco_para_markup(preco_custo, cls.MARKUP_IDEAL_MAX, aliquota_simples)
 
         markup_sugerido = (cls.MARKUP_IDEAL_MIN + cls.MARKUP_IDEAL_MAX) / 2
-        preco_sugerido = cls.preco_para_markup(preco_custo, markup_sugerido)
+        preco_sugerido = cls.preco_para_markup(preco_custo, markup_sugerido, aliquota_simples)
 
         preco_ancoragem = ideal_min / (1 - cls.DESCONTO_GATILHO_MAX)
 
         preco_promocional = preco_ancoragem * (1 - cls.DESCONTO_GATILHO_REFERENCIA)
-        markup_promocional = cls.markup(preco_promocional, preco_custo)
+        markup_promocional = cls.markup(preco_promocional, preco_custo, aliquota_simples)
 
         preco_com_desconto_min = preco_ancoragem * (1 - cls.DESCONTO_GATILHO_MIN)
         preco_com_desconto_max = preco_ancoragem * (1 - cls.DESCONTO_GATILHO_MAX)
-        markup_com_desconto_min = cls.markup(preco_com_desconto_min, preco_custo)
-        markup_com_desconto_max = cls.markup(preco_com_desconto_max, preco_custo)
+        markup_com_desconto_min = cls.markup(preco_com_desconto_min, preco_custo, aliquota_simples)
+        markup_com_desconto_max = cls.markup(preco_com_desconto_max, preco_custo, aliquota_simples)
 
         return {
             "preco_custo": preco_custo,
+            "aliquota_simples": aliquota_simples,
+            "zero_a_zero": zero_a_zero,
+            "markup_zero_a_zero": cls.markup(zero_a_zero, preco_custo, aliquota_simples),
             "piso": piso,
-            "markup_piso": cls.markup(piso, preco_custo),
+            "markup_piso": cls.markup(piso, preco_custo, aliquota_simples),
             "ideal_min": ideal_min,
             "ideal_max": ideal_max,
             "preco_sugerido": preco_sugerido,
-            "markup_sugerido": cls.markup(preco_sugerido, preco_custo),
+            "markup_sugerido": cls.markup(preco_sugerido, preco_custo, aliquota_simples),
             "preco_ancoragem": preco_ancoragem,
             "preco_promocional": preco_promocional,
             "markup_promocional": markup_promocional,
@@ -155,7 +191,7 @@ class RegrasShopee:
 
 
 # ==================================================================================
-# 2. FUNÇÕES AUXILIARES DE FORMATAÇÃO
+# 3. FUNÇÕES AUXILIARES DE FORMATAÇÃO
 # ==================================================================================
 
 def formatar_moeda(valor: float) -> str:
@@ -169,7 +205,7 @@ def formatar_percentual(valor: float) -> str:
 
 
 # ==================================================================================
-# 3. GRÁFICO (Matplotlib, com tema escuro combinando com a página)
+# 4. GRÁFICO (Matplotlib, com tema escuro combinando com a página)
 # ==================================================================================
 
 def montar_grafico(resultado: dict) -> Figure:
@@ -177,22 +213,23 @@ def montar_grafico(resultado: dict) -> Figure:
     Plota a curva real Venda Bruta (X) x Venda Líquida (Y), usando a função
     RegrasShopee.venda_liquida diretamente — por isso a curva mostra os
     "degraus" causados pelas mudanças de alíquota/taxa fixa entre as faixas
-    de preço da Shopee (R$ 7,99 / R$ 79,99 / R$ 99,99 / R$ 199,99 / R$ 499,99).
+    de preço da Shopee (R$ 9,00 / R$ 79,99 / R$ 99,99 / R$ 199,99 / R$ 499,99).
     """
     preco_custo = resultado["preco_custo"]
+    aliquota = resultado["aliquota_simples"]
 
-    # Intervalo do eixo X: um pouco antes do piso até um pouco depois da
-    # ancoragem, para enquadrar todos os pontos-chave calculados.
-    x_min = max(preco_custo * 0.5, 0.01)
+    x_min = max(resultado["zero_a_zero"] * 0.5, 0.01)
     x_max = resultado["preco_ancoragem"] * 1.15
     vendas_brutas = np.linspace(x_min, x_max, 400)
-    vendas_liquidas = np.array([RegrasShopee.venda_liquida(v) for v in vendas_brutas])
+    vendas_liquidas = np.array(
+        [RegrasShopee.venda_liquida(v, aliquota) for v in vendas_brutas]
+    )
 
     cor_fundo = "#0e1117"   # combina com o tema escuro padrão do Streamlit
     cor_texto = "#e0e0e0"
     cor_grade = "#3a3a3a"
 
-    fig = Figure(figsize=(8, 5), dpi=110, facecolor=cor_fundo)
+    fig = Figure(figsize=(8, 5.2), dpi=110, facecolor=cor_fundo)
     ax = fig.add_subplot(111, facecolor=cor_fundo)
 
     for spine in ax.spines.values():
@@ -207,17 +244,17 @@ def montar_grafico(resultado: dict) -> Figure:
         zorder=3,
     )
 
-    # -- Linha de referência y = x (venda líquida se não houvesse imposto/taxa) -- #
+    # -- Linha de referência y = x (sem impostos/taxas) -- #
     ax.plot(
         vendas_brutas, vendas_brutas,
         color="#5a5a5a", linewidth=1.2, linestyle=":", label="Sem impostos/taxas (referência)",
         zorder=1,
     )
 
-    # -- Faixa ideal de venda bruta destacada -- #
+    # -- Faixa de trabalho destacada (35% a 75%) -- #
     ax.axvspan(
         resultado["ideal_min"], resultado["ideal_max"],
-        color="#3498db", alpha=0.12, label="Faixa ideal de venda (43% – 87%)",
+        color="#3498db", alpha=0.12, label="Faixa de trabalho (35% – 75%)",
     )
 
     # -- Linha vertical do piso operacional -- #
@@ -227,6 +264,13 @@ def montar_grafico(resultado: dict) -> Figure:
         label=f"Piso ({formatar_moeda(resultado['piso'])})",
     )
 
+    # -- Linha vertical do zero a zero -- #
+    ax.axvline(
+        resultado["zero_a_zero"],
+        color="#7f8c8d", linestyle="--", linewidth=1.3,
+        label=f"Zero a Zero ({formatar_moeda(resultado['zero_a_zero'])})",
+    )
+
     # -- Pontos-chave marcados sobre a curva -- #
     pontos = [
         (resultado["preco_sugerido"], "#f1c40f", "Preço sugerido"),
@@ -234,7 +278,7 @@ def montar_grafico(resultado: dict) -> Figure:
         (resultado["preco_promocional"], "#e74c3c", "Promocional (\"Por:\")"),
     ]
     for preco_bruto, cor, rotulo in pontos:
-        liquido = RegrasShopee.venda_liquida(preco_bruto)
+        liquido = RegrasShopee.venda_liquida(preco_bruto, aliquota)
         ax.scatter(
             [preco_bruto], [liquido],
             color=cor, s=90, zorder=5, edgecolor="black", label=rotulo,
@@ -244,7 +288,7 @@ def montar_grafico(resultado: dict) -> Figure:
     ax.set_ylabel("Venda Líquida (R$)", color=cor_texto)
     ax.set_title(f"Custo: {formatar_moeda(preco_custo)}", fontsize=12, color=cor_texto, pad=12)
     ax.legend(
-        loc="upper left", fontsize=8, facecolor=cor_fundo,
+        loc="upper left", fontsize=7.5, facecolor=cor_fundo,
         edgecolor=cor_grade, labelcolor=cor_texto,
     )
 
@@ -253,7 +297,7 @@ def montar_grafico(resultado: dict) -> Figure:
 
 
 # ==================================================================================
-# 4. INTERFACE STREAMLIT
+# 5. INTERFACE STREAMLIT
 # ==================================================================================
 
 st.set_page_config(
@@ -262,7 +306,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# -- Pequeno ajuste visual via CSS para os cards de resultado -- #
 st.markdown(
     """
     <style>
@@ -287,19 +330,40 @@ st.markdown(
         font-size: 12px;
         color: #7d8590;
     }
+    .card-detalhe {
+        font-size: 11.5px;
+        color: #aab2bd;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #2a2e37;
+        display: flex;
+        gap: 16px;
+    }
+    .card-detalhe b {
+        color: #d4d8de;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-def card(titulo: str, valor: str, subtitulo: str, cor: str):
+def detalhar_preco(preco_bruto: float, aliquota_simples: float) -> tuple:
+    """Retorna (imposto_em_reais, taxa_shopee_em_reais) para um preço bruto."""
+    imposto = preco_bruto * aliquota_simples
+    taxa = RegrasShopee.taxa_shopee(preco_bruto)
+    return imposto, taxa
+
+
+def card(titulo: str, valor: str, subtitulo: str, cor: str, detalhe: str = None):
+    detalhe_html = f'<div class="card-detalhe">{detalhe}</div>' if detalhe else ""
     st.markdown(
         f"""
         <div class="card">
             <div class="card-titulo">{titulo}</div>
             <div class="card-valor" style="color:{cor};">{valor}</div>
             <div class="card-sub">{subtitulo}</div>
+            {detalhe_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -307,7 +371,7 @@ def card(titulo: str, valor: str, subtitulo: str, cor: str):
 
 
 st.title("🛒 Precificador Shopee")
-st.caption("Simples Nacional • EPP 4ª Faixa (10,70%) — Markup mínimo 23,49% • Faixa ideal 43% a 87%")
+st.caption("Markup mínimo 12,75% • Faixa de trabalho 35% a 75% • Imposto conforme a faixa do Simples Nacional selecionada abaixo")
 
 col_entrada, col_espaco = st.columns([1, 2])
 with col_entrada:
@@ -319,11 +383,19 @@ with col_entrada:
         format="%.2f",
         help="Informe apenas o custo do produto — o restante é calculado automaticamente.",
     )
+
+    faixa_selecionada = st.selectbox(
+        "Faixa do Simples Nacional (Anexo I)",
+        options=list(TABELA_SIMPLES_ANEXO_I.keys()),
+        index=3,  # default: 4ª Faixa (10,70%)
+        help="Alíquota nominal aplicada sobre a venda bruta, conforme sua faixa de faturamento.",
+    )
+    aliquota_simples = TABELA_SIMPLES_ANEXO_I[faixa_selecionada]
+
     calcular = st.button("Calcular Precificação", type="primary", use_container_width=True)
 
-# Mantém o último resultado calculado entre interações (session_state)
 if calcular and preco_custo > 0:
-    st.session_state["resultado"] = RegrasShopee.calcular_precificacao(preco_custo)
+    st.session_state["resultado"] = RegrasShopee.calcular_precificacao(preco_custo, aliquota_simples)
 elif calcular and preco_custo <= 0:
     st.error("Digite um Preço de Custo maior que zero.")
 
@@ -332,46 +404,79 @@ if "resultado" in st.session_state:
 
     col_cards, col_grafico = st.columns([1, 1.4])
 
+    aliquota = r["aliquota_simples"]
+
     with col_cards:
+        imposto, taxa = detalhar_preco(r["zero_a_zero"], aliquota)
         card(
-            "🛡️ Piso de Segurança (mín. 23,49%)",
+            "⚪ Zero a Zero (sem lucro)",
+            formatar_moeda(r["zero_a_zero"]),
+            f"Cobre impostos ({formatar_percentual(aliquota)}) e taxas da Shopee — markup 0%",
+            "#95a5a6",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+        )
+
+        imposto, taxa = detalhar_preco(r["piso"], aliquota)
+        card(
+            "🛡️ Piso de Segurança (mín. 12,75%)",
             formatar_moeda(r["piso"]),
             f"Markup real: {formatar_percentual(r['markup_piso'])} • cobre impostos e custos operacionais",
             "#e67e22",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
         )
+
+        imposto, taxa = detalhar_preco(r["preco_sugerido"], aliquota)
         card(
-            "✅ Preço Sugerido (faixa ideal)",
+            "✅ Preço Sugerido (faixa de trabalho)",
             formatar_moeda(r["preco_sugerido"]),
-            f"Markup: {formatar_percentual(r['markup_sugerido'])} (ponto médio da faixa ideal)",
+            f"Markup: {formatar_percentual(r['markup_sugerido'])} (ponto médio da faixa de trabalho)",
             "#2ecc71",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
         )
+
+        imposto_min, taxa_min = detalhar_preco(r["ideal_min"], aliquota)
+        imposto_max, taxa_max = detalhar_preco(r["ideal_max"], aliquota)
         card(
-            "📊 Faixa Ideal de Venda (43% a 87%)",
+            "📊 Faixa de Trabalho (35% a 75%)",
             f"{formatar_moeda(r['ideal_min'])} → {formatar_moeda(r['ideal_max'])}",
-            "De 43% (entrada) até 87% (topo) de markup sobre o custo do produto",
+            "De 35% (entrada) até 75% (topo) de markup sobre o custo do produto",
             "#3498db",
+            detalhe=(
+                f"<span>No piso (35%) → 💰 {formatar_moeda(imposto_min)} · 🛍️ {formatar_moeda(taxa_min)}</span><br>"
+                f"<span>No topo (75%) → 💰 {formatar_moeda(imposto_max)} · 🛍️ {formatar_moeda(taxa_max)}</span>"
+            ),
         )
+
+        imposto, taxa = detalhar_preco(r["preco_ancoragem"], aliquota)
         card(
             "🏷️ Preço Teto / Ancoragem (\"De:\")",
             formatar_moeda(r["preco_ancoragem"]),
-            "Suporta desconto de até 55% sem furar o markup ideal",
+            "Suporta desconto de até 55% sem furar a faixa de trabalho",
             "#9b59b6",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
         )
+
+        imposto, taxa = detalhar_preco(r["preco_promocional"], aliquota)
         card(
             "🔥 Preço Promocional com Gatilho (\"Por:\")",
             formatar_moeda(r["preco_promocional"]),
             f"Com 45% off • Markup resultante: {formatar_percentual(r['markup_promocional'])}",
             "#e74c3c",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
         )
 
+        imposto_35, taxa_35 = detalhar_preco(r["preco_com_desconto_min"], aliquota)
+        imposto_55, taxa_55 = detalhar_preco(r["preco_com_desconto_max"], aliquota)
         st.info(
             f"Com desconto de 35%: **{formatar_moeda(r['preco_com_desconto_min'])}** "
-            f"(markup {formatar_percentual(r['markup_com_desconto_min'])})  \n"
+            f"(markup {formatar_percentual(r['markup_com_desconto_min'])}) "
+            f"— 💰 {formatar_moeda(imposto_35)} · 🛍️ {formatar_moeda(taxa_35)}  \n"
             f"Com desconto de 55%: **{formatar_moeda(r['preco_com_desconto_max'])}** "
-            f"(markup {formatar_percentual(r['markup_com_desconto_max'])})"
+            f"(markup {formatar_percentual(r['markup_com_desconto_max'])}) "
+            f"— 💰 {formatar_moeda(imposto_55)} · 🛍️ {formatar_moeda(taxa_55)}"
         )
 
     with col_grafico:
         st.pyplot(montar_grafico(r), use_container_width=True)
 else:
-    st.info("Informe o preço de custo ao lado e clique em **Calcular Precificação** para ver os resultados.")
+    st.info("Informe o preço de custo, selecione sua faixa do Simples Nacional e clique em **Calcular Precificação**.")
