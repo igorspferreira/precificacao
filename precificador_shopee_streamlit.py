@@ -337,7 +337,8 @@ st.markdown(
         padding-top: 8px;
         border-top: 1px solid #2a2e37;
         display: flex;
-        gap: 16px;
+        flex-wrap: wrap;
+        gap: 6px 14px;
     }
     .card-detalhe b {
         color: #d4d8de;
@@ -348,11 +349,13 @@ st.markdown(
 )
 
 
-def detalhar_preco(preco_bruto: float, aliquota_simples: float) -> tuple:
-    """Retorna (imposto_em_reais, taxa_shopee_em_reais) para um preço bruto."""
+def detalhar_preco(preco_bruto: float, aliquota_simples: float, preco_custo: float) -> tuple:
+    """Retorna (imposto_em_reais, taxa_shopee_em_reais, lucro_em_reais) para um preço bruto."""
     imposto = preco_bruto * aliquota_simples
     taxa = RegrasShopee.taxa_shopee(preco_bruto)
-    return imposto, taxa
+    liquido = RegrasShopee.venda_liquida(preco_bruto, aliquota_simples)
+    lucro = liquido - preco_custo
+    return imposto, taxa, lucro
 
 
 def card(titulo: str, valor: str, subtitulo: str, cor: str, detalhe: str = None):
@@ -405,75 +408,76 @@ if "resultado" in st.session_state:
     col_cards, col_grafico = st.columns([1, 1.4])
 
     aliquota = r["aliquota_simples"]
+    custo = r["preco_custo"]
 
     with col_cards:
-        imposto, taxa = detalhar_preco(r["zero_a_zero"], aliquota)
+        imposto, taxa, lucro = detalhar_preco(r["zero_a_zero"], aliquota, custo)
         card(
             "⚪ Zero a Zero (sem lucro)",
             formatar_moeda(r["zero_a_zero"]),
             f"Cobre impostos ({formatar_percentual(aliquota)}) e taxas da Shopee — markup 0%",
             "#95a5a6",
-            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span><span>📈 Lucro: <b>{formatar_moeda(lucro)}</b></span>",
         )
 
-        imposto, taxa = detalhar_preco(r["piso"], aliquota)
+        imposto, taxa, lucro = detalhar_preco(r["piso"], aliquota, custo)
         card(
             "🛡️ Piso de Segurança (mín. 12,75%)",
             formatar_moeda(r["piso"]),
             f"Markup real: {formatar_percentual(r['markup_piso'])} • cobre impostos e custos operacionais",
             "#e67e22",
-            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span><span>📈 Lucro: <b>{formatar_moeda(lucro)}</b></span>",
         )
 
-        imposto, taxa = detalhar_preco(r["preco_sugerido"], aliquota)
+        imposto, taxa, lucro = detalhar_preco(r["preco_sugerido"], aliquota, custo)
         card(
             "✅ Preço Sugerido (faixa de trabalho)",
             formatar_moeda(r["preco_sugerido"]),
             f"Markup: {formatar_percentual(r['markup_sugerido'])} (ponto médio da faixa de trabalho)",
             "#2ecc71",
-            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span><span>📈 Lucro: <b>{formatar_moeda(lucro)}</b></span>",
         )
 
-        imposto_min, taxa_min = detalhar_preco(r["ideal_min"], aliquota)
-        imposto_max, taxa_max = detalhar_preco(r["ideal_max"], aliquota)
+        imposto_min, taxa_min, lucro_min = detalhar_preco(r["ideal_min"], aliquota, custo)
+        imposto_max, taxa_max, lucro_max = detalhar_preco(r["ideal_max"], aliquota, custo)
         card(
             "📊 Faixa de Trabalho (35% a 75%)",
             f"{formatar_moeda(r['ideal_min'])} → {formatar_moeda(r['ideal_max'])}",
             "De 35% (entrada) até 75% (topo) de markup sobre o custo do produto",
             "#3498db",
             detalhe=(
-                f"<span>No piso (35%) → 💰 {formatar_moeda(imposto_min)} · 🛍️ {formatar_moeda(taxa_min)}</span><br>"
-                f"<span>No topo (75%) → 💰 {formatar_moeda(imposto_max)} · 🛍️ {formatar_moeda(taxa_max)}</span>"
+                f"<span>No piso (35%) → 💰 {formatar_moeda(imposto_min)} · 🛍️ {formatar_moeda(taxa_min)} · 📈 {formatar_moeda(lucro_min)}</span><br>"
+                f"<span>No topo (75%) → 💰 {formatar_moeda(imposto_max)} · 🛍️ {formatar_moeda(taxa_max)} · 📈 {formatar_moeda(lucro_max)}</span>"
             ),
         )
 
-        imposto, taxa = detalhar_preco(r["preco_ancoragem"], aliquota)
+        imposto, taxa, lucro = detalhar_preco(r["preco_ancoragem"], aliquota, custo)
         card(
             "🏷️ Preço Teto / Ancoragem (\"De:\")",
             formatar_moeda(r["preco_ancoragem"]),
             "Suporta desconto de até 55% sem furar a faixa de trabalho",
             "#9b59b6",
-            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span><span>📈 Lucro: <b>{formatar_moeda(lucro)}</b></span>",
         )
 
-        imposto, taxa = detalhar_preco(r["preco_promocional"], aliquota)
+        imposto, taxa, lucro = detalhar_preco(r["preco_promocional"], aliquota, custo)
         card(
             "🔥 Preço Promocional com Gatilho (\"Por:\")",
             formatar_moeda(r["preco_promocional"]),
             f"Com 45% off • Markup resultante: {formatar_percentual(r['markup_promocional'])}",
             "#e74c3c",
-            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span>",
+            detalhe=f"<span>💰 Imposto: <b>{formatar_moeda(imposto)}</b></span><span>🛍️ Taxa Shopee: <b>{formatar_moeda(taxa)}</b></span><span>📈 Lucro: <b>{formatar_moeda(lucro)}</b></span>",
         )
 
-        imposto_35, taxa_35 = detalhar_preco(r["preco_com_desconto_min"], aliquota)
-        imposto_55, taxa_55 = detalhar_preco(r["preco_com_desconto_max"], aliquota)
+        imposto_35, taxa_35, lucro_35 = detalhar_preco(r["preco_com_desconto_min"], aliquota, custo)
+        imposto_55, taxa_55, lucro_55 = detalhar_preco(r["preco_com_desconto_max"], aliquota, custo)
         st.info(
             f"Com desconto de 35%: **{formatar_moeda(r['preco_com_desconto_min'])}** "
             f"(markup {formatar_percentual(r['markup_com_desconto_min'])}) "
-            f"— 💰 {formatar_moeda(imposto_35)} · 🛍️ {formatar_moeda(taxa_35)}  \n"
+            f"— 💰 {formatar_moeda(imposto_35)} · 🛍️ {formatar_moeda(taxa_35)} · 📈 {formatar_moeda(lucro_35)}  \n"
             f"Com desconto de 55%: **{formatar_moeda(r['preco_com_desconto_max'])}** "
             f"(markup {formatar_percentual(r['markup_com_desconto_max'])}) "
-            f"— 💰 {formatar_moeda(imposto_55)} · 🛍️ {formatar_moeda(taxa_55)}"
+            f"— 💰 {formatar_moeda(imposto_55)} · 🛍️ {formatar_moeda(taxa_55)} · 📈 {formatar_moeda(lucro_55)}"
         )
 
     with col_grafico:
